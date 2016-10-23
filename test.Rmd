@@ -1,0 +1,101 @@
+---
+title: "National Weather Service Storm Data Analysis - Most Damaging Event Types"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+##Synopsis
+The data is analysed by firstly reading it into R as a data frame. To enable analysis of the damage to human health, the dataframe is summarised by Event type to calculate the total damage by each event type. Datapoints with comparitively little damage are then filtered out of the dataset to make the final plots more readable. A metric for the total damage to human health (fatalities + injuries) is also calculated with a weighting such that a fatality is worth twice as much as a injury. The total financial damage is calculated by first expanding the data (i.e. 2.5 and k becomes 2500) before summarising it in a similar way to the human health data. In this case the metric for total damage is simply the sum of the property and crop damage. Both datasets are also melted before plotting to make it easier to use plotting libraries (in this case ggplot2). Also, the datasets are arranged in descending order of total damage to make it easier to visualise the data when it is presented in a tabular format.
+
+## Data Processing
+Loads the needed libraries
+```{r}
+library(dplyr)
+library(ggplot2)
+library(reshape2)
+```
+
+Downloads and Reads the dataset into R.
+```{r cache=TRUE}
+download.file("https://d396qusza40orc.cloudfront.net/repdata%2Fdata%2FStormData.csv.bz2", "data.csv.bz2")
+rawData <- read.csv("data.csv.bz2")
+rawData <- rawData %>% group_by(EVTYPE) 
+```
+
+Summarises the relevant variables (Fatalities, INJURIES, and PROPDMG) to make it easier to plot them. Also filters out the data points to remove some of the "noise"" (insignificantly small values) to make the plot more readable.
+```{r}
+summarisedData <- rawData %>% group_by(EVTYPE) %>% summarise(totalFatalities = sum(FATALITIES), totalInjuries = sum(INJURIES))
+humanDamageData <- summarisedData %>% filter(totalFatalities>10, totalInjuries>10)
+```
+
+
+Attempts to estimate the total damage to human health as a function of the totalFatilities and totalInjuries. I chose to weight them such that a fatality is worth twice as much as an injury.
+```{r}
+humanDamageData <- humanDamageData %>% mutate(totalHumanDamage = 2*totalFatalities + totalInjuries) %>% 
+  arrange(desc(totalHumanDamage))
+```
+
+Calculates the total property and crop damage using the PROPDMGEXP column before filtering datapoints with low values to make the plot more readable
+```{r}
+propDamageData <- rawData %>% mutate(completePropDamage = ifelse(tolower(PROPDMGEXP)=="k",PROPDMG*1000,ifelse(tolower(PROPDMGEXP)=="m", PROPDMG*1000000, ifelse(tolower(PROPDMGEXP)=="b",PROPDMG*1000000000,PROPDMG)))) %>%
+  mutate(completeCropDamage = ifelse(tolower(CROPDMGEXP)=="k",CROPDMG*1000,ifelse(tolower(CROPDMGEXP)=="m", CROPDMG*1000000, ifelse(tolower(CROPDMGEXP)=="b",CROPDMG*1000000000,CROPDMG)))) %>%
+  select(EVTYPE, completePropDamage, completeCropDamage) %>%
+  mutate(totalDamage=completePropDamage+completeCropDamage) %>%
+  filter(completePropDamage>1000000, completeCropDamage>1000000) 
+
+propDamageData <- propDamageData %>% group_by(EVTYPE) %>%
+  summarise(totalPropDamage=sum(completePropDamage), totalCropDamage=sum(completeCropDamage), totalDamage=sum(totalDamage))
+```
+
+## Results
+
+####Damage to Human Life
+
+Plots only the fatality and injury data to help visualise any overall trends.
+```{r}
+## Melts the data to make it a long dataset (which can be plotted in ggplot2)
+fatalityAndInjuryData <- melt(humanDamageData %>% select(EVTYPE, totalFatalities, totalInjuries), id="EVTYPE")
+g <- ggplot(fatalityAndInjuryData, aes(EVTYPE, value)) +
+  facet_grid(variable~., scales="free") +
+  geom_point() +
+  theme(axis.text.x = element_text(angle=90, hjust=1)) +
+  ggtitle("Plot showing the total number of fatalities and injuries for different events")
+print(g)
+```
+
+Plots the eariler calculated metric for total human health damage. This helps to visualise the data from the 2 earlier plots and any trends between them.
+```{r}
+g <- ggplot(humanDamageData, aes(EVTYPE, totalHumanDamage)) +
+  geom_point() + 
+  theme(axis.text.x = element_text(angle=90, hjust=1)) +
+  ggtitle("Plot showing the total human damage for different \nevents (based on the earlier calculated metric)")
+print(g)
+```
+
+Displays the 10 events which are most damaging to human health to help inform any decision making (by providing precise information)
+```{r}
+head(arrange(humanDamageData, desc(totalHumanDamage)), 10)
+```
+
+####Property Damage
+
+Plots the property and crop damage data side by side to help visualise any overall trends
+```{r}
+##Melts the data to make it a long dataset (which can be plotted in ggplot2)
+meltedDamageData <- melt(propDamageData %>% select(-totalDamage), id="EVTYPE")
+g <- ggplot(meltedDamageData, aes(EVTYPE, value)) +
+  facet_grid(variable~., scales="free") +
+  geom_point() +
+  theme(axis.text.x = element_text(angle=90, hjust=1)) +
+  ggtitle("Plot showing the total property and crop damage for different events")
+print(g)
+```
+
+Displays the 10 events which cause the most overall financial impact to help inform any decision making (by providing precise information)
+```{r}
+head(arrange(propDamageData, desc(totalDamage), desc(totalPropDamage), desc(totalCropDamage)),10)
+```
+
